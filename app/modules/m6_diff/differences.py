@@ -19,7 +19,8 @@ def _signed(record: dict) -> Decimal:
     return dec(record["amount"]) * int(record["direction"])
 
 
-def reconcile(records: list[dict], matches: list[dict], settings) -> dict:
+def reconcile(records: list[dict], matches: list[dict], settings,
+              clearing_entries: list[dict] | None = None) -> dict:
     valid = [record for record in records if record["status"] == "valid"]
     bank = [record for record in valid if record["side"] == "bank"]
     ledger = [record for record in valid if record["side"] == "ledger"]
@@ -109,6 +110,9 @@ def reconcile(records: list[dict], matches: list[dict], settings) -> dict:
     ]
 
     differences: list[dict] = []
+    clearing_status = {
+        entry["ledger_txn_no"]: entry for entry in (clearing_entries or [])
+    }
     for record in sorted(unmatched_bank, key=lambda item: item["txn_no"]):
         differences.append({
             "kind": "未匹配",
@@ -119,13 +123,23 @@ def reconcile(records: list[dict], matches: list[dict], settings) -> dict:
             "note": record.get("memo", ""),
         })
     for record in sorted(unmatched_ledger, key=lambda item: item["txn_no"]):
+        entry = clearing_status.get(record["txn_no"])
+        if entry and entry.get("status") in ("OUTSTANDING", "PINNED", "PARTIAL"):
+            reason = "CLEARING_OUTSTANDING"
+        elif entry and entry.get("status") == "AMBIGUOUS":
+            reason = "CLEARING_AMBIGUOUS"
+        else:
+            reason = "LEDGER_UNMATCHED"
+        note = record.get("memo", "")
+        if entry and entry.get("candidate_accounts"):
+            note = f"{note} 候选账户 {'/'.join(entry['candidate_accounts'])}".strip()
         differences.append({
-            "kind": "未匹配",
+            "kind": "待清算" if reason.startswith("CLEARING") else "未匹配",
             "side": "账簿",
             "ref": record["txn_no"],
             "amount": _signed(record),
-            "reason": "LEDGER_UNMATCHED",
-            "note": record.get("memo", ""),
+            "reason": reason,
+            "note": note,
         })
     differences.append({
         "kind": "手续费",

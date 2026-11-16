@@ -1,4 +1,8 @@
-"""匹配求解：候选排序 → 不重叠挑选 → 组内合计与手续费分摊。"""
+"""匹配求解：候选排序 → 不重叠挑选 → 组内合计与手续费分摊。
+
+普通匹配只做分户核对；待清算凭证不进普通候选，由 m8_clearing 单独清理，最后统一
+分摊手续费，保证手续费分摊合计仍等于全部匹配组的实际手续费合计。
+"""
 from __future__ import annotations
 
 import hashlib
@@ -32,6 +36,7 @@ def _index(records: list[dict], side: str) -> dict[str, dict]:
 
 
 def solve(candidates: list[dict], records: list[dict], settings) -> list[dict]:
+    """普通分户匹配：只用同一账户内的候选，不产生待清算组。"""
     bank = _index(records, "bank")
     ledger = _index(records, "ledger")
     ordered = sorted(candidates, key=subset.priority_key)
@@ -60,10 +65,16 @@ def solve(candidates: list[dict], records: list[dict], settings) -> list[dict]:
                 "bank_signed": bank_signed,
                 "ledger_signed": ledger_signed,
                 "fee_actual": sum((row["fee"] for row in bank_rows), Decimal("0.00")),
+                "clearing": False,
+                "bank_account": candidate.get("account", ""),
             }
         )
+    return groups
 
-    groups.sort(key=lambda group: (group["tier"], group["match_id"]))
+
+def finalize(groups: list[dict], settings) -> list[dict]:
+    """全量排序并分摊手续费；分摊合计必须等于所有组的实际手续费合计。"""
+    groups = sorted(groups, key=lambda group: (group["tier"], group["match_id"]))
     fee_total = sum((group["fee_actual"] for group in groups), Decimal("0.00"))
     allocations = fees.allocate(
         fee_total,
@@ -74,3 +85,14 @@ def solve(candidates: list[dict], records: list[dict], settings) -> list[dict]:
     for group, allocated in zip(groups, allocations):
         group["fee_alloc"] = allocated
     return groups
+
+
+def solve_all(candidates: list[dict], records: list[dict], settings,
+              confirmations: dict | None = None) -> tuple[list[dict], list[dict]]:
+    """普通分户匹配 + 待清算清理，返回最终匹配组与待清算明细。"""
+    from ..m8_clearing import clearing
+
+    normal = solve(candidates, records, settings)
+    planned = clearing.plan(records, normal, settings, confirmations)
+    groups = finalize(normal + planned["groups"], settings)
+    return groups, planned["entries"]

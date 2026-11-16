@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS candidates (
     bank_sum TEXT NOT NULL,
     ledger_sum TEXT NOT NULL,
     diff TEXT NOT NULL,
-    day_gap INTEGER NOT NULL DEFAULT 0
+    day_gap INTEGER NOT NULL DEFAULT 0,
+    account TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_candidates_run ON candidates(run_id, tier);
 CREATE TABLE IF NOT EXISTS matches (
@@ -82,10 +83,59 @@ CREATE TABLE IF NOT EXISTS matches (
     fee_alloc TEXT NOT NULL DEFAULT '0',
     fee_actual TEXT NOT NULL DEFAULT '0',
     bank_signed TEXT NOT NULL DEFAULT '0',
-    ledger_signed TEXT NOT NULL DEFAULT '0'
+    ledger_signed TEXT NOT NULL DEFAULT '0',
+    clearing INTEGER NOT NULL DEFAULT 0,
+    bank_account TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_matches_run ON matches(run_id, tier);
+CREATE TABLE IF NOT EXISTS clearing_entries (
+    run_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    voucher_key TEXT NOT NULL,
+    ledger_txn_no TEXT NOT NULL,
+    clearing_account TEXT NOT NULL DEFAULT '',
+    amount TEXT NOT NULL DEFAULT '0',
+    direction INTEGER NOT NULL DEFAULT 0,
+    posted_at TEXT NOT NULL DEFAULT '',
+    bank_account TEXT NOT NULL DEFAULT '',
+    match_id TEXT NOT NULL DEFAULT '',
+    bank_ids TEXT NOT NULL DEFAULT '[]',
+    tier INTEGER,
+    cleared TEXT NOT NULL DEFAULT '0',
+    remaining TEXT NOT NULL DEFAULT '0',
+    status TEXT NOT NULL DEFAULT 'OUTSTANDING',
+    candidate_accounts TEXT NOT NULL DEFAULT '[]',
+    confirmed INTEGER NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_clearing_run ON clearing_entries(run_id);
+-- 账户归属确认与批次解耦：同一张待清算凭证重跑后仍命中同一条确认记录。
+CREATE TABLE IF NOT EXISTS clearing_confirmations (
+    voucher_key TEXT PRIMARY KEY,
+    ledger_txn_no TEXT NOT NULL DEFAULT '',
+    bank_account TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    confirmed_at TEXT NOT NULL
+);
 """
+
+CANDIDATE_INSERT = (
+    "INSERT INTO candidates (run_id, cand_id, tier, bank_ids, ledger_ids, bank_sum, "
+    "ledger_sum, diff, day_gap, account) VALUES (?,?,?,?,?,?,?,?,?,?)"
+)
+
+MATCH_INSERT = (
+    "INSERT INTO matches (run_id, match_id, tier, bank_ids, ledger_ids, bank_sum, "
+    "ledger_sum, diff, day_gap, fee_alloc, fee_actual, bank_signed, ledger_signed, "
+    "clearing, bank_account) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+)
+
+CLEARING_INSERT = (
+    "INSERT INTO clearing_entries (run_id, seq, voucher_key, ledger_txn_no, "
+    "clearing_account, amount, direction, posted_at, bank_account, match_id, bank_ids, "
+    "tier, cleared, remaining, status, candidate_accounts, confirmed, note) "
+    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+)
 
 RUN_COLUMNS = (
     "run_id", "created_at", "rule_version", "params_json", "bank_sha256", "ledger_sha256",
@@ -117,6 +167,33 @@ class Store:
     def init(self) -> None:
         with self._conn() as conn:
             conn.executescript(SCHEMA)
+            self._migrate(conn)
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """补齐旧库缺失的列；只加列，不动已有数据。"""
+        additions = {
+            "candidates": (
+                ("day_gap", "INTEGER NOT NULL DEFAULT 0"),
+                ("account", "TEXT NOT NULL DEFAULT ''"),
+            ),
+            "matches": (
+                ("day_gap", "INTEGER NOT NULL DEFAULT 0"),
+                ("fee_alloc", "TEXT NOT NULL DEFAULT '0'"),
+                ("fee_actual", "TEXT NOT NULL DEFAULT '0'"),
+                ("bank_signed", "TEXT NOT NULL DEFAULT '0'"),
+                ("ledger_signed", "TEXT NOT NULL DEFAULT '0'"),
+                ("clearing", "INTEGER NOT NULL DEFAULT 0"),
+                ("bank_account", "TEXT NOT NULL DEFAULT ''"),
+            ),
+        }
+        for table, columns in additions.items():
+            existing = {
+                row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            for name, decl in columns:
+                if name not in existing:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
     # ---------- 批次 ----------
     @staticmethod
@@ -144,7 +221,7 @@ class Store:
         return [self._run_row(row) for row in rows]
 
     def save_run(self, run: dict, records: list[dict], candidates: list[dict],
-                 matches: list[dict]) -> None:
+                 matches: list[dict], clearing_entries: list[dict] | None = None) -> None:
         params_json = json.dumps(run.get("params", {}), ensure_ascii=False, sort_keys=True)
         states_json = json.dumps(run.get("input_states", {}), ensure_ascii=False)
         with self._conn() as conn:
@@ -152,6 +229,7 @@ class Store:
             conn.execute("DELETE FROM records WHERE run_id = ?", (run_id,))
             conn.execute("DELETE FROM candidates WHERE run_id = ?", (run_id,))
             conn.execute("DELETE FROM matches WHERE run_id = ?", (run_id,))
+            conn.execute("DELETE FROM clearing_entries WHERE run_id = ?", (run_id,))
             conn.execute(
                 """INSERT OR REPLACE INTO runs (
                     run_id, created_at, rule_version, params_json, bank_sha256, ledger_sha256,
@@ -190,34 +268,51 @@ class Store:
                 ],
             )
             conn.executemany(
-                """INSERT INTO candidates (run_id, cand_id, tier, bank_ids, ledger_ids,
-                    bank_sum, ledger_sum, diff, day_gap) VALUES (?,?,?,?,?,?,?,?,?)""",
-                [
-                    (
-                        run_id, c["cand_id"], c["tier"],
-                        json.dumps(c["bank_ids"], ensure_ascii=False),
-                        json.dumps(c["ledger_ids"], ensure_ascii=False),
-                        str(c["bank_sum"]), str(c["ledger_sum"]), str(c["diff"]), c["day_gap"],
-                    )
-                    for c in candidates
-                ],
+                CANDIDATE_INSERT,
+                [self._candidate_values(run_id, c) for c in candidates],
             )
+            conn.executemany(MATCH_INSERT, [self._match_values(run_id, m) for m in matches])
             conn.executemany(
-                """INSERT INTO matches (run_id, match_id, tier, bank_ids, ledger_ids,
-                    bank_sum, ledger_sum, diff, day_gap, fee_alloc, fee_actual,
-                    bank_signed, ledger_signed) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                [
-                    (
-                        run_id, m["match_id"], m["tier"],
-                        json.dumps(m["bank_ids"], ensure_ascii=False),
-                        json.dumps(m["ledger_ids"], ensure_ascii=False),
-                        str(m["bank_sum"]), str(m["ledger_sum"]), str(m["diff"]), m["day_gap"],
-                        str(m.get("fee_alloc", "0")), str(m.get("fee_actual", "0")),
-                        str(m.get("bank_signed", "0")), str(m.get("ledger_signed", "0")),
-                    )
-                    for m in matches
-                ],
+                CLEARING_INSERT,
+                [self._clearing_values(run_id, index, entry)
+                 for index, entry in enumerate(clearing_entries or [])],
             )
+
+    @staticmethod
+    def _candidate_values(run_id: str, c: dict) -> tuple:
+        return (
+            run_id, c["cand_id"], c["tier"],
+            json.dumps(c["bank_ids"], ensure_ascii=False),
+            json.dumps(c["ledger_ids"], ensure_ascii=False),
+            str(c["bank_sum"]), str(c["ledger_sum"]), str(c["diff"]), c["day_gap"],
+            c.get("account", ""),
+        )
+
+    @staticmethod
+    def _match_values(run_id: str, m: dict) -> tuple:
+        return (
+            run_id, m["match_id"], m["tier"],
+            json.dumps(m["bank_ids"], ensure_ascii=False),
+            json.dumps(m["ledger_ids"], ensure_ascii=False),
+            str(m["bank_sum"]), str(m["ledger_sum"]), str(m["diff"]), m["day_gap"],
+            str(m.get("fee_alloc", "0")), str(m.get("fee_actual", "0")),
+            str(m.get("bank_signed", "0")), str(m.get("ledger_signed", "0")),
+            1 if m.get("clearing") else 0, m.get("bank_account", ""),
+        )
+
+    @staticmethod
+    def _clearing_values(run_id: str, seq: int, entry: dict) -> tuple:
+        return (
+            run_id, seq, entry["key"], entry["ledger_txn_no"],
+            entry.get("clearing_account", ""), str(entry["amount"]),
+            int(entry["direction"]), entry.get("posted_at", ""),
+            entry.get("bank_account", ""), entry.get("match_id", ""),
+            json.dumps(entry.get("bank_ids", []), ensure_ascii=False),
+            entry.get("tier"), str(entry.get("cleared", "0")),
+            str(entry.get("remaining", "0")), entry.get("status", "OUTSTANDING"),
+            json.dumps(entry.get("candidate_accounts", []), ensure_ascii=False),
+            1 if entry.get("confirmed") else 0, entry.get("note", ""),
+        )
 
     def set_status(self, run_id: str, status: str) -> None:
         with self._conn() as conn:
@@ -271,42 +366,65 @@ class Store:
             item = dict(row)
             item["bank_ids"] = json.loads(item.pop("bank_ids") or "[]")
             item["ledger_ids"] = json.loads(item.pop("ledger_ids") or "[]")
+            item["clearing"] = bool(item.get("clearing"))
             out.append(item)
         return out
+
+    def clearing_entries(self, run_id: str) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM clearing_entries WHERE run_id = ? ORDER BY seq", (run_id,)
+            ).fetchall()
+        out = []
+        for row in rows:
+            item = dict(row)
+            item["key"] = item.pop("voucher_key")
+            item["bank_ids"] = json.loads(item.pop("bank_ids") or "[]")
+            item["candidate_accounts"] = json.loads(item.pop("candidate_accounts") or "[]")
+            item["confirmed"] = bool(item.get("confirmed"))
+            out.append(item)
+        return out
+
+    # ---------- 待清算账户归属确认（跨批次保留） ----------
+    def confirmations(self) -> dict[str, dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM clearing_confirmations").fetchall()
+        return {row["voucher_key"]: dict(row) for row in rows}
+
+    def confirm_clearing(self, key: str, ledger_txn_no: str, bank_account: str,
+                         note: str = "", confirmed_at: str = "") -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO clearing_confirmations "
+                "(voucher_key, ledger_txn_no, bank_account, note, confirmed_at) "
+                "VALUES (?,?,?,?,?) ON CONFLICT(voucher_key) DO UPDATE SET "
+                "ledger_txn_no = excluded.ledger_txn_no, "
+                "bank_account = excluded.bank_account, note = excluded.note, "
+                "confirmed_at = excluded.confirmed_at",
+                (key, ledger_txn_no, bank_account, note, confirmed_at),
+            )
+
+    def unconfirm_clearing(self, key: str) -> None:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM clearing_confirmations WHERE voucher_key = ?", (key,))
 
     def replace_candidates(self, run_id: str, candidates: list[dict]) -> None:
         with self._conn() as conn:
             conn.execute("DELETE FROM candidates WHERE run_id = ?", (run_id,))
             conn.executemany(
-                """INSERT INTO candidates (run_id, cand_id, tier, bank_ids, ledger_ids,
-                    bank_sum, ledger_sum, diff, day_gap) VALUES (?,?,?,?,?,?,?,?,?)""",
-                [
-                    (
-                        run_id, c["cand_id"], c["tier"],
-                        json.dumps(c["bank_ids"], ensure_ascii=False),
-                        json.dumps(c["ledger_ids"], ensure_ascii=False),
-                        str(c["bank_sum"]), str(c["ledger_sum"]), str(c["diff"]), c["day_gap"],
-                    )
-                    for c in candidates
-                ],
+                CANDIDATE_INSERT,
+                [self._candidate_values(run_id, c) for c in candidates],
             )
 
-    def replace_matches(self, run_id: str, matches: list[dict]) -> None:
+    def replace_matches(self, run_id: str, matches: list[dict],
+                        clearing_entries: list[dict] | None = None) -> None:
         with self._conn() as conn:
             conn.execute("DELETE FROM matches WHERE run_id = ?", (run_id,))
-            conn.executemany(
-                """INSERT INTO matches (run_id, match_id, tier, bank_ids, ledger_ids,
-                    bank_sum, ledger_sum, diff, day_gap, fee_alloc, fee_actual,
-                    bank_signed, ledger_signed) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                [
-                    (
-                        run_id, m["match_id"], m["tier"],
-                        json.dumps(m["bank_ids"], ensure_ascii=False),
-                        json.dumps(m["ledger_ids"], ensure_ascii=False),
-                        str(m["bank_sum"]), str(m["ledger_sum"]), str(m["diff"]), m["day_gap"],
-                        str(m.get("fee_alloc", "0")), str(m.get("fee_actual", "0")),
-                        str(m.get("bank_signed", "0")), str(m.get("ledger_signed", "0")),
-                    )
-                    for m in matches
-                ],
-            )
+            conn.executemany(MATCH_INSERT, [self._match_values(run_id, m) for m in matches])
+            if clearing_entries is not None:
+                conn.execute("DELETE FROM clearing_entries WHERE run_id = ?", (run_id,))
+                conn.executemany(
+                    CLEARING_INSERT,
+                    [self._clearing_values(run_id, index, entry)
+                     for index, entry in enumerate(clearing_entries)],
+                )

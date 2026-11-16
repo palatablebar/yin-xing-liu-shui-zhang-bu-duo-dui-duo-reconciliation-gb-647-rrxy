@@ -8,6 +8,7 @@
   <span class="total"><b>匹配</b><em>{{ c.get('matched_groups', 0) }}</em>组</span>
   <span class="total"><b>未匹配</b><em>{{ c.get('bank_unmatched_rows', 0) + c.get('ledger_unmatched_rows', 0) }}</em>笔</span>
   <span class="total"><b>隔离</b><em>{{ c.get('bank_quarantine', 0) + c.get('ledger_quarantine', 0) }}</em>条</span>
+  <span class="total"><b>待清算</b><em>{% if clearing %}{{ clearing.totals.remaining|money }}{% else %}0.00{% endif %}</em>元</span>
   <span class="total total-right"><b>差额</b><em>{% if reconciliation %}{{ reconciliation.totals.match_gap|money }}{% else %}0.00{% endif %}</em>元</span>
 </section>
 <main class="workbench">

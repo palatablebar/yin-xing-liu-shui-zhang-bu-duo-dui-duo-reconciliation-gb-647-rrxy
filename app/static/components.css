@@ -80,3 +80,34 @@ select { padding: 0 6px; }
 .empty { margin: 12px; color: var(--ink-faint); font-size: 12px; }
 
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* 待清算：状态徽标与行内确认 */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 19px;
+  padding: 0 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.badge.ok { border-color: #c4e0d2; background: #e9f4ee; color: var(--ok); }
+.badge.warn { border-color: #e6d3ab; background: #fbf4e4; color: var(--warn); }
+.badge.alert { border-color: #eec6cc; background: #fbecee; color: var(--bad); }
+.badge.info { border-color: #c3d4e8; background: #eaf1f9; color: var(--info); }
+
+.account-pin { display: inline-flex; gap: 4px; align-items: center; }
+.account-pin select { height: 22px; font-size: 11px; }
+.account-pin .btn { height: 22px; padding: 0 7px; font-size: 11px; }
+.account-pin .btn.danger { color: var(--bad); border-color: #eec6cc; }
+
+.grid tbody tr.clearing-unsettled td:first-child { border-left: 2px solid var(--warn); }
+.grid tbody tr.clearing-ambiguous td:first-child { border-left: 2px solid var(--bad); }
+.grid tbody tr.clearing-isolated td:first-child { border-left: 2px solid var(--ink-faint); }
+
+.cell-note { color: var(--ink-faint); font-size: 11px; white-space: normal; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; }

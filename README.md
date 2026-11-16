@@ -6,6 +6,9 @@
 ## 核心规则
 
 - 候选：方向相同、金额差 ≤ 0.02 元、本地日期差 ≤ 3 天。
+- 分户核对：普通凭证的银行流水与账簿凭证账户必须完全相同，不做跨账户配对。
+- 待清算：记在集团待清算户下的凭证不进普通候选，只在**一个**实际银行账户内清理；
+  多个账户都能凑出等额组合时保持挂账并列出候选账户，等人工确认，不按文件顺序猜。
 - 一对一、一对多、多对一都参与求解；多对一用受限子集和，最多 4 条，按金额降序枚举。
 - 择一：层级优先（一对一 → 一对多 → 多对一），再按金额差、日期差、业务号升序，取不重叠的组合。
 - 手续费只计银行侧，不进入匹配金额；匹配组按银行金额比例分摊手续费，尾差用最大余额法分到分。
@@ -22,6 +25,7 @@
 | M5 多对多求解 | 求解不重叠匹配组，看手续费分摊 | `POST /api/matches`、页面 `/matches` |
 | M6 差异与批次 | 看两侧守恒、差异归因与历史批次 | `GET /api/differences`、`GET /api/batches`、页面 `/batches` |
 | M7 报告导出 | 导出报告 CSV 与运行清单 JSON | `GET /api/export/report.csv`、`/api/export/manifest.json`、页面 `/export` |
+| M8 待清算清理 | 看每笔待清算凭证的实际银行账户、匹配组合、剩余未清，确认或撤销账户归属 | `GET/POST/DELETE /api/clearing`、页面 `/clearing` |
 
 ## 启动
 
@@ -40,6 +44,20 @@ docker compose up -d --build
 5. 打开「批次」，核对银行笔数、账簿笔数、手续费分摊、匹配差额四项平衡。
 6. 打开「导出」，下载报告 CSV 与运行清单 JSON。
 
+待清算演示（可选）：
+
+```bash
+curl -s -X POST http://127.0.0.1:18206/api/statements/import \
+  -F side=bank -F sample=clearing_bank.csv
+curl -s -X POST http://127.0.0.1:18206/api/statements/import \
+  -F side=ledger -F sample=clearing_ledger.csv
+```
+
+打开「待清算」，可见 V901 清理到 6222-0012、V902 清理到 6222-0034、
+V903 清理 999.99 余 0.01、V905 因两个账户都能凑出 700.00 而挂账待确认、
+V904 无流水全额挂账；对 V905 选择账户后点「确认账户」即可清理，
+重跑后确认记录仍在，明细不会翻倍。
+
 ## 测试
 
 ```bash
@@ -51,18 +69,19 @@ docker compose exec -T app python -m pytest -q
 - `/` 工作台：左右对照、固定合计条、差异行左边框。
 - `/quarantine` 隔离区。
 - `/candidates` 候选清单。
-- `/matches` 匹配组。
+- `/matches` 匹配组（含银行账户与「待清算清理」口径标记）。
+- `/clearing` 待清算逐笔复核与账户归属确认。
 - `/batches` 对账与批次历史。
 - `/export` 导出。
 
 ## 目录
 
 ```text
-app/            平台层与七个功能模块
-app/templates/  base + 六个页面
+app/            平台层与八个功能模块
+app/templates/  base + 七个页面
 app/static/     theme / layout / components + 三个脚本
 docs/           DEPTH、DATA-DICTIONARY、RUNBOOK
-sample_data/    六份脏样例与一份空白样例
+sample_data/    脏样例、空白样例与待清算样例
 tests/          模块测试、端到端、不变量
 ```
 

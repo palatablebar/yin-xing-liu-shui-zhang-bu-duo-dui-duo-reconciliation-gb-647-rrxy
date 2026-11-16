@@ -7,7 +7,8 @@ from decimal import Decimal
 from ...manifest import build_manifest
 
 
-def manifest_text(run: dict, reconciliation: dict | None = None) -> str:
+def manifest_text(run: dict, reconciliation: dict | None = None,
+                  clearing: dict | None = None) -> str:
     payload = build_manifest(run)
     if reconciliation:
         payload["totals"] = {
@@ -15,4 +16,6 @@ def manifest_text(run: dict, reconciliation: dict | None = None) -> str:
             for key, value in reconciliation["totals"].items()
         }
         payload["counts"].update(reconciliation["counts"])
+    if clearing:
+        payload["clearing"] = clearing["totals"]
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)

@@ -17,7 +17,8 @@ def payload(store, run: dict | None, settings) -> dict:
         }
     records = store.records(run["run_id"])
     matches = store.matches(run["run_id"])
-    result = differences.reconcile(records, matches, settings)
+    result = differences.reconcile(records, matches, settings,
+                                   store.clearing_entries(run["run_id"]))
     result["run_id"] = run["run_id"]
     return result
 

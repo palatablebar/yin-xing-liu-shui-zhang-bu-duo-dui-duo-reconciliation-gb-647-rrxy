@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 
-RULE_VERSION = "2026.11.1"
+RULE_VERSION = "2026.11.2"
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BASE_DIR.parent
 
@@ -25,12 +25,21 @@ DIRECTION_ALIASES = {
     "借": -1, "付": -1, "支出": -1, "debit": -1, "dr": -1, "-": -1, "d": -1,
 }
 
-# 账户登记：未登记的账户进隔离区，不参与对账。
-ACCOUNTS = {
+# 具体银行账户：银行流水必须落在这些账户上，分户核对时账户必须完全相同。
+BANK_ACCOUNTS = {
     "6222-0012": "基本户",
     "6222-0034": "一般户",
     "6222-0056": "货款户",
 }
+
+# 待清算户：集团层面的过渡户。只有账簿凭证可以记在这里；它没有物理流水，
+# 需要按「一笔凭证对应同一个实际银行账户」的边界清理到具体账户。
+CLEARING_ACCOUNTS = {
+    "9900-0000": "集团待清算户",
+}
+
+# 账户登记：未登记的账户进隔离区，不参与对账。
+ACCOUNTS = {**BANK_ACCOUNTS, **CLEARING_ACCOUNTS}
 
 
 def dec(value) -> Decimal:
@@ -53,6 +62,8 @@ class Settings:
     encodings: tuple = ENCODING_CHAIN
     sentinels: tuple = SENTINELS
     accounts: dict = field(default_factory=lambda: dict(ACCOUNTS))
+    bank_accounts: dict = field(default_factory=lambda: dict(BANK_ACCOUNTS))
+    clearing_accounts: dict = field(default_factory=lambda: dict(CLEARING_ACCOUNTS))
 
     @classmethod
     def from_env(cls) -> "Settings":

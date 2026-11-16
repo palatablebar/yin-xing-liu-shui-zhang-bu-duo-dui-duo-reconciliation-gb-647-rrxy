@@ -78,5 +78,8 @@ def payload(settings) -> dict:
         "subset_max": settings.subset_max,
         "direction": {"in": ["贷", "收", "credit"], "out": ["借", "付", "debit"]},
         "accounts": settings.accounts,
+        "bank_accounts": settings.bank_accounts,
+        "clearing_accounts": settings.clearing_accounts,
+        "account_policy": "普通凭证按账户完全相同分户核对；待清算凭证只清理到一个实际银行账户",
         "fee_policy": "手续费计入银行侧，不进入匹配金额",
     }

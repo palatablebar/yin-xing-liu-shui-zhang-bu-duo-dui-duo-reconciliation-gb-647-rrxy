@@ -58,7 +58,7 @@ def test_batches_manifest_has_run_id_and_sha(client, demo):
     assert batch["run_id"] == demo["run_id"]
     assert len(batch["manifest"]["inputs"]["bank"]["sha256"]) == 64
     assert len(batch["manifest"]["inputs"]["ledger"]["sha256"]) == 64
-    assert batch["manifest"]["rule_version"] == "2026.11.1"
+    assert batch["manifest"]["rule_version"] == client.app.state.settings.rule_version
 
 
 def test_rerun_same_inputs_keeps_totals(client, demo):

@@ -28,7 +28,7 @@ def test_manifest_has_input_sha(client, demo):
     assert body["run_id"] == demo["run_id"]
     assert len(body["inputs"]["bank"]["sha256"]) == 64
     assert len(body["inputs"]["ledger"]["sha256"]) == 64
-    assert body["rule_version"] == "2026.11.1"
+    assert body["rule_version"] == client.app.state.settings.rule_version
     assert body["counts"]["bank_valid"] == 22
 
 

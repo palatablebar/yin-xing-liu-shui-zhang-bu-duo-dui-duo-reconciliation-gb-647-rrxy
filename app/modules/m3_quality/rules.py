@@ -50,6 +50,9 @@ def evaluate_row(side: str, row: dict, settings) -> dict:
 
     if account and account not in settings.accounts:
         codes.append("ACCOUNT_UNKNOWN")
+    elif account and side == "bank" and account in settings.clearing_accounts:
+        # 待清算户是账簿侧的过渡户，没有物理银行流水；银行侧出现即为账户口径错误。
+        codes.append("CLEARING_IN_BANK")
 
     primary = reasons.primary(codes)
     record = {

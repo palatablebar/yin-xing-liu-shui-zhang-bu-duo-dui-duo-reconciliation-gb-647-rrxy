@@ -5,7 +5,7 @@ from pathlib import Path
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
-PAGES = ("/", "/quarantine", "/candidates", "/matches", "/batches", "/export")
+PAGES = ("/", "/quarantine", "/candidates", "/matches", "/clearing", "/batches", "/export")
 
 
 def test_full_pipeline_from_samples(client):

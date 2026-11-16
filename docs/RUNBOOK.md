@@ -24,8 +24,26 @@ docker compose up -d --build
 2. `GET /api/quarantine`：查看隔离行与原因分布。
 3. `GET /api/candidates`：查看已生成候选。
 4. `GET /api/matches`：查看匹配组与手续费分摊。
-5. `GET /api/differences`：查看两侧守恒与差异归因。
-6. `GET /api/export/report.csv` 与 `GET /api/export/manifest.json`：导出。
+5. `GET /api/clearing`：查看待清算逐笔复核（实际账户、匹配组合、剩余未清）。
+6. `GET /api/differences`：查看两侧守恒与差异归因。
+7. `GET /api/export/report.csv` 与 `GET /api/export/manifest.json`：导出。
+
+## 待清算清理
+
+```bash
+# 查看复核清单
+curl -s http://127.0.0.1:18206/api/clearing
+# 确认某笔多义凭证的账户归属（key 从 GET /api/clearing 的 entries[].key 取）
+curl -s -X POST http://127.0.0.1:18206/api/clearing/confirm \
+  -H 'Content-Type: application/json' \
+  -d '{"key":"9900-0000|V905|700.00|2026-04-02T16:00:00+00:00","bank_account":"6222-0012"}'
+# 撤销确认
+curl -s -X DELETE 'http://127.0.0.1:18206/api/clearing/confirm?key=...'
+```
+
+- 只有已登记的实际银行账户可以确认；待清算户本身不能作为归属目标。
+- 确认后立即用同一套求解重跑本批次；确认记录按凭证键跨批次保留。
+- `AMBIGUOUS` 表示多个账户都能凑出等额组合，不确认就一直挂账，不会自动猜。
 
 ## 单步重跑
 

@@ -1,4 +1,4 @@
-"""页面装配：模板环境、格式化过滤器、六个页面的上下文。"""
+"""页面装配：模板环境、格式化过滤器、七个页面的上下文。"""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -15,6 +15,7 @@ from .modules.m5_matching.subset import TIER_NAMES
 from .modules.m6_diff import differences as differences_mod
 from .modules.m6_diff import history as history_mod
 from .modules.m7_export import service as export_service
+from .modules.m8_clearing import clearing as clearing_mod
 
 TEMPLATE_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
@@ -25,6 +26,7 @@ NAV = (
     ("隔离区", "/quarantine"),
     ("候选", "/candidates"),
     ("匹配", "/matches"),
+    ("待清算", "/clearing"),
     ("批次", "/batches"),
     ("导出", "/export"),
 )
@@ -87,6 +89,17 @@ STATUS_LABELS = {
     "empty": "空批次",
 }
 
+CLEARING_STATUS_LABELS = clearing_mod.STATUS_LABELS
+
+CLEARING_STATUS_KINDS = {
+    "CLEARED": "ok",
+    "PARTIAL": "warn",
+    "OUTSTANDING": "warn",
+    "AMBIGUOUS": "alert",
+    "PINNED": "warn",
+    "ISOLATED": "alert",
+}
+
 TOTAL_LABELS = {
     "bank_gross": "银行发生额",
     "bank_fee": "手续费",
@@ -116,6 +129,9 @@ def setup(app: FastAPI) -> None:
     templates.env.filters["reason_label"] = reason_label
     templates.env.filters["tier_label"] = tier_label
     templates.env.filters["status_label"] = status_label
+    templates.env.filters["clearing_status"] = lambda code: CLEARING_STATUS_LABELS.get(
+        str(code or ""), str(code or "")
+    )
     app.state.templates = templates
 
     def base(request: Request, title: str, current: str) -> dict:
@@ -148,7 +164,8 @@ def setup(app: FastAPI) -> None:
             for key in group["bank_ids"] + group["ledger_ids"]:
                 pairs[key] = group["match_id"]
         reconciliation = (
-            differences_mod.reconcile(records, matches, settings) if run else None
+            differences_mod.reconcile(records, matches, settings,
+                                      store.clearing_entries(run["run_id"])) if run else None
         )
         context.update({
             "bank_rows": bank_rows,
@@ -158,6 +175,9 @@ def setup(app: FastAPI) -> None:
             "pairs": pairs,
             "contract": contract_service.payload(settings),
             "quarantine_count": len(store.quarantine(run["run_id"])) if run else 0,
+            "clearing": clearing_mod.review(
+                store.clearing_entries(run["run_id"]) if run else []
+            ),
         })
         return render(request, "index.html", context)
 
@@ -194,12 +214,30 @@ def setup(app: FastAPI) -> None:
         run = context["run"]
         groups = store.matches(run["run_id"]) if run else []
         fee_total = sum((Decimal(group["fee_alloc"]) for group in groups), Decimal("0.00"))
+        clearing = clearing_mod.review(store.clearing_entries(run["run_id"]) if run else [])
         context.update({
             "groups": groups,
             "tier_names": TIER_NAMES,
             "fee_total": fee_total,
+            "clearing": clearing,
         })
         return render(request, "matches.html", context)
+
+    @app.get("/clearing")
+    def clearing(request: Request):
+        store = request.app.state.store
+        context = base(request, "待清算", "/clearing")
+        run = context["run"]
+        entries = store.clearing_entries(run["run_id"]) if run else []
+        context.update({
+            "clearing": clearing_mod.review(entries),
+            "bank_accounts": context["settings"].bank_accounts,
+            "clearing_accounts": context["settings"].clearing_accounts,
+            "status_labels": CLEARING_STATUS_LABELS,
+            "status_kinds": CLEARING_STATUS_KINDS,
+            "confirmations": store.confirmations() if run else {},
+        })
+        return render(request, "clearing.html", context)
 
     @app.get("/batches")
     def batches(request: Request):
@@ -213,7 +251,9 @@ def setup(app: FastAPI) -> None:
         if run:
             records = store.records(run["run_id"])
             matches = store.matches(run["run_id"])
-            reconciliation = differences_mod.reconcile(records, matches, settings)
+            reconciliation = differences_mod.reconcile(
+                records, matches, settings, store.clearing_entries(run["run_id"])
+            )
             manifest = history_mod.manifest(store, run, reconciliation["totals"])
         context.update({
             "batches": batches_list,

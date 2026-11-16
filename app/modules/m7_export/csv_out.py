@@ -21,7 +21,8 @@ def _money(value) -> str:
     return str(value)
 
 
-def report_text(records: list[dict], matches: list[dict], reconciliation: dict) -> str:
+def report_text(records: list[dict], matches: list[dict], reconciliation: dict,
+                clearing: dict | None = None) -> str:
     totals = reconciliation["totals"]
     buffer = io.StringIO()
     writer = csv.writer(buffer)
@@ -52,7 +53,26 @@ def report_text(records: list[dict], matches: list[dict], reconciliation: dict) 
             _money(Decimal(group["ledger_sum"])),
             _money(Decimal(group["diff"])),
             _money(Decimal(group["fee_alloc"])),
+            f"{group.get('bank_account', '')} | 待清算清理" if group.get("clearing")
+            else group.get("bank_account", ""),
+        ])
+
+    for entry in (clearing or {}).get("entries", []):
+        writer.writerow([
+            "待清算",
+            entry["ledger_txn_no"],
+            TIER_NAMES.get(int(entry["tier"]), "") if entry.get("tier") else "",
+            len(entry.get("bank_ids", [])),
+            1,
+            " ".join(entry.get("bank_ids", [])),
+            entry["ledger_txn_no"],
+            entry["cleared"],
+            entry["amount"],
+            entry["remaining"],
             "",
+            f"{entry['status']} {entry['status_label']} | 账户 {entry.get('bank_account') or '-'}"
+            + (f" | 候选 {'/'.join(entry['candidate_accounts'])}"
+               if entry.get("candidate_accounts") else ""),
         ])
 
     for item in reconciliation["differences"]:

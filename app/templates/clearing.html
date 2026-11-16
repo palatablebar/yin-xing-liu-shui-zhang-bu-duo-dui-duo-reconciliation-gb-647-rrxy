@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}待清算{% endblock %}
+{% block body %}
+<main class="page">
+  <header class="page-head">
+    <h1>待清算</h1>
+    <span class="page-meta">{{ clearing.totals.records }} 笔凭证 · 清理 {{ clearing.groups }} 组</span>
+    <span class="page-meta">待清金额 {{ clearing.totals.amount|money }} 元</span>
+    <span class="page-meta">已清 {{ clearing.totals.cleared|money }} 元</span>
+    <span class="page-meta">剩余 {{ clearing.totals.remaining|money }} 元</span>
+    <a class="btn" href="/matches">看匹配组</a>
+  </header>
+
+  <section class="panel">
+    <h2>规则边界</h2>
+    <div class="chips">
+      <span class="chip">普通凭证分户核对：账户必须完全相同</span>
+      <span class="chip">待清算凭证只清理到一个实际银行账户</span>
+      <span class="chip">多账户都能凑额 → 挂账待确认，不猜账户</span>
+      <span class="chip">组合与凭证金额差 ≤ {{ settings.tolerance }} 元</span>
+      <span class="chip">单次清理 ≤ {{ settings.subset_max }} 笔流水</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>状态分布</h2>
+    <div class="chips">
+      {% for code, label in status_labels.items() %}
+        <span class="badge {{ status_kinds.get(code, '') }}">{{ label }} {{ clearing.totals.status_counts.get(code, 0) }}</span>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>逐笔复核</h2>
+    <div class="table-wrap">
+      <table class="grid" id="clearing-table">
+        <thead>
+          <tr>
+            <th>凭证号</th>
+            <th>待清算户</th>
+            <th class="num">凭证金额</th>
+            <th>实际银行账户</th>
+            <th>匹配组合（银行流水）</th>
+            <th>组号</th>
+            <th class="num">已清金额</th>
+            <th class="num">剩余未清</th>
+            <th>状态</th>
+            <th>账户归属</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in clearing.entries %}
+          <tr class="{% if row.status in ('OUTSTANDING', 'PINNED', 'PARTIAL') %}clearing-unsettled{% elif row.status == 'AMBIGUOUS' %}clearing-ambiguous{% elif row.status == 'ISOLATED' %}clearing-isolated{% endif %}">
+            <td class="mono">{{ row.ledger_txn_no or '-' }}</td>
+            <td class="mono">{{ row.clearing_account }}</td>
+            <td class="num mono">{{ row.amount|money }}</td>
+            <td class="mono">
+              {% if row.bank_account %}{{ row.bank_account }}
+              {% elif row.candidate_accounts %}多个账户都能凑额
+              {% else %}-{% endif %}
+            </td>
+            <td class="mono">
+              {% if row.bank_ids %}{{ row.bank_ids|join(' ') }}
+              {% elif row.candidate_accounts %}
+                <span class="cell-note">候选账户：{% for account in row.candidate_accounts %}{{ account }}{% if not loop.last %} / {% endif %}{% endfor %}</span>
+              {% elif row.note and row.status != 'ISOLATED' %}
+                <span class="cell-note">{{ row.note }}</span>
+              {% else %}-{% endif %}
+            </td>
+            <td class="mono">{{ row.match_id or '-' }}</td>
+            <td class="num mono">{{ row.cleared|money }}</td>
+            <td class="num mono">{{ row.remaining|money }}</td>
+            <td>
+              <span class="badge {{ status_kinds.get(row.status, '') }}">{{ row.status_label }}</span>
+              {% if row.confirmed %}<span class="badge info">人工确认</span>{% endif %}
+            </td>
+            <td>
+              {% if row.status == 'ISOLATED' %}
+                <span class="cell-note">先修正源文件（{{ row.note }}）</span>
+              {% elif row.confirmed %}
+                <span class="account-pin">
+                  <span class="mono">{{ row.bank_account or '-' }}</span>
+                  <button class="btn danger" data-unconfirm="{{ row.key }}">撤销确认</button>
+                </span>
+              {% elif row.status in ('AMBIGUOUS', 'OUTSTANDING', 'PINNED') %}
+                <span class="account-pin">
+                  <select data-account-select="{{ row.key }}" aria-label="选择实际银行账户">
+                    {% for account, name in bank_accounts.items() %}
+                      <option value="{{ account }}">{{ account }} {{ name }}</option>
+                    {% endfor %}
+                  </select>
+                  <button class="btn" data-confirm="{{ row.key }}">确认账户</button>
+                </span>
+              {% else %}
+                <span class="cell-note">
+                  {% if row.tier == 1 %}单笔流水清理{% else %}多笔流水合并清理{% endif %}
+                </span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% if not clearing.entries %}<p class="empty">本期没有记在待清算户下的凭证。</p>{% endif %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>账户口径</h2>
+    <table class="grid compact" id="account-table">
+      <thead><tr><th>账户</th><th>名称</th><th>类型</th></tr></thead>
+      <tbody>
+      {% for account, name in bank_accounts.items() %}
+        <tr><td class="mono">{{ account }}</td><td>{{ name }}</td><td>实际银行账户</td></tr>
+      {% endfor %}
+      {% for account, name in clearing_accounts.items() %}
+        <tr><td class="mono">{{ account }}</td><td>{{ name }}</td><td>待清算过渡户</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="empty">已清金额 = min(凭证金额, 清理组合金额)；剩余未清 = 凭证金额 − 已清金额，下期继续清理。确认记录按凭证键跨批次保留，重跑不会丢失，也不会重复挂账。</p>
+  </section>
+</main>
+<script src="/static/clearing.js" defer></script>
+{% endblock %}

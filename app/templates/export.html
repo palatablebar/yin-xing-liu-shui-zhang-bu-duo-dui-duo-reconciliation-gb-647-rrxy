@@ -26,5 +26,19 @@
     </table>
     {% if not total_rows %}<p class="empty">还没有批次。</p>{% endif %}
   </section>
+  {% if summary.clearing and summary.clearing.records %}
+  <section class="panel">
+    <h2>待清算</h2>
+    <table class="grid compact" id="export-clearing-table">
+      <thead><tr><th>名称</th><th class="num">金额</th></tr></thead>
+      <tbody>
+        <tr><td>待清凭证</td><td class="num mono">{{ summary.clearing.records }}</td></tr>
+        <tr><td>待清金额</td><td class="num mono">{{ summary.clearing.amount|money }}</td></tr>
+        <tr><td>已清金额</td><td class="num mono">{{ summary.clearing.cleared|money }}</td></tr>
+        <tr><td>剩余未清</td><td class="num mono">{{ summary.clearing.remaining|money }}</td></tr>
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
 </main>
 {% endblock %}

@@ -19,9 +19,12 @@ REASONS = {
     "SIGN_UNKNOWN": ("借贷符号未知", "质量"),
     "DATE_PARSE": ("日期无法解析", "质量"),
     "ACCOUNT_UNKNOWN": ("账户未登记", "质量"),
+    "CLEARING_IN_BANK": ("银行流水记在待清算户", "质量"),
     "DUP_TXN_CONFLICT": ("流水号取值冲突", "质量"),
     "BANK_UNMATCHED": ("银行未匹配", "差异"),
     "LEDGER_UNMATCHED": ("账簿未匹配", "差异"),
+    "CLEARING_OUTSTANDING": ("待清算挂账", "差异"),
+    "CLEARING_AMBIGUOUS": ("待清算账户待确认", "差异"),
     "TOLERANCE_GAP": ("容差差额", "差异"),
     "FEE_TOTAL": ("手续费合计", "差异"),
 }
@@ -37,6 +40,7 @@ PRIORITY = (
     "SIGN_UNKNOWN",
     "DATE_PARSE",
     "ACCOUNT_UNKNOWN",
+    "CLEARING_IN_BANK",
     "DUP_TXN_CONFLICT",
 )
 

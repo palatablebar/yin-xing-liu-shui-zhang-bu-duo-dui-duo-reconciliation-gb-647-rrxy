@@ -1,7 +1,7 @@
 # 深度登记 ledgerbank
 
-- 规模：中型（7 个功能模块 / 7 个页面 / 75 条测试）
-- 核心规则：方向相同、金额差 ≤ 0.02 元、日期差 ≤ 3 天的候选；一对一、一对多、多对一按层级与金额差确定性择一；多对一用最多 4 条的受限子集和；手续费单独计入银行侧并按最大余额法分摊。
+- 规模：中型（8 个功能模块 / 7 个页面 / 103 条测试）
+- 核心规则：方向相同、金额差 ≤ 0.02 元、日期差 ≤ 3 天的候选；普通凭证按账户完全相同分户核对；待清算户凭证单独清理到唯一实际银行账户，账户多义时挂账待确认；一对一、一对多、多对一按层级与金额差确定性择一；多对一用最多 4 条的受限子集和；手续费单独计入银行侧并按最大余额法分摊。
 - 使用者与工作流：连锁零售财务共享组会计每月把 12 个账户的银行流水与账簿凭证放在一起核对；一笔付款拆多张凭证、多笔流水合并付一张发票，原先逐条手工比对，现在一次运行得到匹配组、未匹配清单、隔离证据与两侧守恒。
 
 ## 功能模块
@@ -15,8 +15,9 @@
 | M5 多对多求解 | 求解不重叠匹配组，看手续费分摊 | POST /api/matches、页面 /matches | `app/modules/m5_matching/subset.py` `app/modules/m5_matching/fees.py` `app/modules/m5_matching/solve.py` | `tests/test_m5_matching.py` |
 | M6 差异与批次 | 看两侧守恒、差异归因与历史批次 | GET /api/differences、GET /api/batches、页面 /batches | `app/modules/m6_diff/differences.py` `app/modules/m6_diff/history.py` | `tests/test_m6_differences.py` |
 | M7 报告导出 | 导出报告 CSV 与运行清单 JSON | GET /api/export/report.csv、页面 /export | `app/modules/m7_export/csv_out.py` `app/modules/m7_export/manifest_out.py` | `tests/test_m7_export.py` |
+| M8 待清算清理 | 看每笔待清算凭证的实际账户、匹配组合、剩余未清；确认/撤销账户归属 | GET/POST/DELETE /api/clearing、页面 /clearing | `app/modules/m8_clearing/clearing.py` `app/modules/m8_clearing/service.py` | `tests/test_m8_clearing.py` |
 
-端到端：`tests/test_e2e.py`（样例 → 采信 → 质量 → 候选 → 匹配 → 差异 → 导出，含 6 个页面 200、幂等重跑与失败输入恢复）；不变量：`tests/test_invariants.py`。
+端到端：`tests/test_e2e.py`（样例 → 采信 → 质量 → 候选 → 匹配 → 差异 → 导出，含 7 个页面 200、幂等重跑与失败输入恢复）；不变量：`tests/test_invariants.py`。
 
 ## 陷阱登记
 
@@ -33,6 +34,9 @@
 | TRAP-19 | 同一对流水同时命中一对一与子集候选 | 结果取决于候选生成顺序 | 层级优先 + 金额差 + 日期差 + 业务号排序，输入顺序变化不影响结果 | `app/modules/m5_matching/subset.py` | `tests/test_m5_matching.py::test_result_independent_of_candidate_order` |
 | TRAP-23 | 日期差正好 3 天与 4 天；23:59:59 与次日 00:00 | 端点重复计入或跨日归错桶 | 本地日桶左闭右开 `[日初, 次日初)`；窗口按自然日差 ≤3 | `app/modules/m4_candidates/window.py` | `tests/test_m4_candidates.py::test_window_boundary_three_days_included` |
 | TRAP-24 | 手续费按比例分摊后合计差一分 | 各自四舍五入，分摊合计不等于实际合计 | 最大余额法分到 0.01 元，按组号确定性分配尾差 | `app/modules/m5_matching/fees.py` | `tests/test_m5_matching.py::test_fee_allocation_sums_to_actual` |
+| TRAP-31 | 待清算凭证只记集团待清算户，银行流水记在具体账户 | 严格账户相等 → 永久挂账；随意跨账户 → 同额款项记错门店 | 普通凭证分户核对；待清算凭证只在单一实际账户内清理，多账户可凑额时显式挂账待确认 | `app/modules/m4_candidates/candidate.py`、`app/modules/m8_clearing/clearing.py` | `tests/test_m8_clearing.py::test_normal_candidates_never_cross_accounts`、`test_same_amount_in_two_accounts_stays_ambiguous` |
+| TRAP-32 | 一次清理已把多笔流水用完，后续凭证只剩空池 | 重复使用同一笔流水，造成重复清理 | 普通匹配与待清算清理共用占用集，每个 `bank txn_no` 只出现一次 | `app/modules/m8_clearing/clearing.py`、`app/modules/m5_matching/solve.py` | `tests/test_m8_clearing.py::test_clearing_and_normal_groups_never_share_bank_rows` |
+| TRAP-33 | 清理中途失败后整批重跑 | 待清算明细翻倍、已确认账户归属丢失 | 待清算明细随 run_id 先删后插；账户确认按凭证键跨批次保留 | `app/store.py`、`app/modules/m8_clearing/service.py` | `tests/test_m8_clearing.py::test_confirm_then_rerun_keeps_attribution_without_duplicates`、`test_reexport_twice_no_duplicate_clearing_rows` |
 
 ## 对账规则
 
@@ -46,7 +50,7 @@
 ## 反例与不变量
 
 - 反例（朴素实现会挂）：`tests/test_m5_matching.py::test_bank_signed_total_matches_decimal_sum`（float 累加对不上分）、`tests/test_m1_ingest.py::test_truncated_tail_rejected`（`readlines()` 会把半行当数据）、`tests/test_m3_quality.py::test_duplicate_txn_keeps_earliest`（后写覆盖会得到 999.00）、`tests/test_m5_matching.py::test_many_to_one_subset_bounded_to_four`（5 笔合并会被错误凑成一笔）、`tests/test_m4_candidates.py::test_window_four_days_excluded`（宽窗口会多配一对）。
-- 不变量：`tests/test_invariants.py::test_bank_conservation`（守恒）、`tests/test_invariants.py::test_disjoint_assignment`（一组不占两行）、`tests/test_invariants.py::test_fee_conservation`（分摊守恒）、`tests/test_invariants.py::test_rerun_row_counts_stable`（幂等）、`tests/test_invariants.py::test_quarantine_excluded_from_totals`（隔离不计入合计）。
+- 不变量：`tests/test_invariants.py::test_bank_conservation`（守恒）、`tests/test_invariants.py::test_disjoint_assignment`（一组不占两行）、`tests/test_invariants.py::test_fee_conservation`（分摊守恒）、`tests/test_invariants.py::test_rerun_row_counts_stable`（幂等）、`tests/test_invariants.py::test_quarantine_excluded_from_totals`（隔离不计入合计）；待清算：`tests/test_m8_clearing.py::test_clearing_totals_are_consistent`（已清 + 剩余 = 待清）、`test_ledger_identity_balanced_with_partial_clearing`（部分清理仍守恒）。
 - 端到端：`tests/test_e2e.py::test_full_pipeline_from_samples`。
 
 ## 已知不覆盖

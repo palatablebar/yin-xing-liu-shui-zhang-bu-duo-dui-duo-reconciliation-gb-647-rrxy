@@ -1,6 +1,8 @@
 """候选生成：一对一、一对多（账簿子集和）、多对一（银行子集和）。
 
 - 金额差 ≤ 容差、日期差 ≤ 窗口、方向相同；
+- 分户核对：银行流水与账簿凭证的账户必须完全相同；
+- 待清算户不在本模块生成候选，由 m8_clearing 单独按「一个实际账户」清理；
 - 子集最多 4 条，按金额降序枚举，超过目标 + 容差的分支不再递归；
 - 手续费不参与匹配金额，只随银行行进入成本统计。
 """
@@ -85,19 +87,27 @@ def _candidate(tier: int, banks: list[dict], ledgers: list[dict], zone) -> dict:
         "ledger_sum": ledger_sum,
         "diff": diff,
         "day_gap": gap,
+        "account": banks[0]["account"],
     }
 
 
 def build(records: list[dict], settings) -> list[dict]:
+    """分户候选：只在银行账户完全相同的行之间生成。
+
+    待清算户凭证不进普通候选，避免「同额跨账户」被随意配对。
+    """
     zone = window.tzinfo(settings.tz_name)
-    bank = valid_rows(records, "bank")
-    ledger = valid_rows(records, "ledger")
+    bank = [row for row in valid_rows(records, "bank")
+            if row["account"] in settings.bank_accounts]
+    ledger = [row for row in valid_rows(records, "ledger")
+              if row["account"] in settings.bank_accounts]
     tolerance = settings.tolerance
     max_items = settings.subset_max
     results: list[dict] = []
 
     for bank_row in bank:
-        for ledger_row in ledger:
+        same_account = [row for row in ledger if row["account"] == bank_row["account"]]
+        for ledger_row in same_account:
             if bank_row["direction"] != ledger_row["direction"]:
                 continue
             gap = window.day_gap(bank_row["posted_at"], ledger_row["posted_at"], zone)
@@ -109,7 +119,8 @@ def build(records: list[dict], settings) -> list[dict]:
     for bank_row in bank:
         pool = [
             row for row in ledger
-            if row["direction"] == bank_row["direction"]
+            if row["account"] == bank_row["account"]
+            and row["direction"] == bank_row["direction"]
             and window.day_gap(bank_row["posted_at"], row["posted_at"], zone) <= settings.window_days
         ]
         for combo in bounded_subsets(pool, bank_row["amount"], tolerance, max_items):
@@ -118,7 +129,8 @@ def build(records: list[dict], settings) -> list[dict]:
     for ledger_row in ledger:
         pool = [
             row for row in bank
-            if row["direction"] == ledger_row["direction"]
+            if row["account"] == ledger_row["account"]
+            and row["direction"] == ledger_row["direction"]
             and window.day_gap(ledger_row["posted_at"], row["posted_at"], zone) <= settings.window_days
         ]
         for combo in bounded_subsets(pool, ledger_row["amount"], tolerance, max_items):
